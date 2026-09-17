@@ -1,0 +1,47 @@
+name: megabox-alarm
+
+# 저장 경로: .github/workflows/megabox.yml
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"   # 5분마다 (UTC 기준이지만 간격이라 상관 없음)
+  workflow_dispatch:         # 수동 실행 버튼
+    inputs:
+      mode:
+        description: "실행 모드"
+        required: false
+        default: "watch"
+        type: choice
+        options: [watch, probe, test]
+
+concurrency:
+  group: megabox-alarm
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 이전 상태 복원
+        uses: actions/cache/restore@v4
+        with:
+          path: state.json
+          key: megabox-state-
+          restore-keys: megabox-state-
+
+      - name: 좌석 확인
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT: ${{ secrets.TG_CHAT }}
+          MODE: ${{ inputs.mode || 'watch' }}
+        run: node check.js
+
+      - name: 상태 저장
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: state.json
+          key: megabox-state-${{ github.run_id }}-${{ github.run_attempt }}
