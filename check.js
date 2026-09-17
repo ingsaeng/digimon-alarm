@@ -19,7 +19,7 @@ const TITLE_TOKENS = ["디지몬", "어드벤처"];
 
 // 아트그라피 판정: 아래 중 "하나라도" 있으면 ★ 표시
 const ART_TOKENS = ["아트그라피", "아트그래피", "artgraphy", "artgrafy"];
-const REQUIRE_ARTGRAPHY = true; // probe에서 ★ 확인 후 true 전환 권장
+const REQUIRE_ARTGRAPHY = false; // probe에서 ★ 확인 후 true 전환 권장
 
 // 지점 자동 매칭이 어긋날 때 강제 지정
 // 예: const BRANCH_OVERRIDE = { "20260920": { "하남스타필드": "1381" } };
@@ -27,7 +27,7 @@ const BRANCH_OVERRIDE = {};
 
 const MIN_SEATS = 1;             // 2인 관람이면 2
 
-const LOOP_COUNT = 4;            // 실행 1회당 확인 횟수
+const LOOP_COUNT = 8;            // 실행 1회당 확인 횟수 (약 9분 30초 소요)
 const LOOP_GAP_MS = 70000;       // 확인 사이 간격
 
 const BASE = "https://www.megabox.co.kr";
