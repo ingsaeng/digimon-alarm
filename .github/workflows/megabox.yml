@@ -32,11 +32,26 @@ jobs:
           key: megabox-state-
           restore-keys: megabox-state-
 
+      - name: 네트워크 진단
+        continue-on-error: true
+        run: |
+          echo "--- DNS 조회 ---"
+          getent ahosts www.megabox.co.kr || echo "DNS 실패"
+          echo "--- IPv4 강제 접속 ---"
+          curl -4 -sS -o /dev/null --max-time 20 \
+            -w "HTTP %{http_code} / %{time_total}s / IP %{remote_ip}\n" \
+            https://www.megabox.co.kr/ || echo "IPv4 curl 실패"
+          echo "--- 기본(IPv6 우선) 접속 ---"
+          curl -sS -o /dev/null --max-time 20 \
+            -w "HTTP %{http_code} / %{time_total}s / IP %{remote_ip}\n" \
+            https://www.megabox.co.kr/ || echo "기본 curl 실패"
+
       - name: 좌석 확인
         env:
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_CHAT: ${{ secrets.TG_CHAT }}
           MODE: ${{ inputs.mode || 'watch' }}
+          NODE_OPTIONS: --dns-result-order=ipv4first
         run: node check.js
 
       - name: 상태 저장
