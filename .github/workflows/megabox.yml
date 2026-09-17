@@ -14,10 +14,7 @@ on:
         type: choice
         options: [watch, probe, test]
 
-concurrency:
-  group: megabox-alarm
-  cancel-in-progress: false
-
+# concurrency 미설정. 실행이 겹쳐도 취소되지 않고 모두 진행되도록 의도
 jobs:
   check:
     runs-on: ubuntu-latest
