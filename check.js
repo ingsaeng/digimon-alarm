@@ -14,9 +14,17 @@ const TARGETS = {
   "20260920": ["코엑스", "하남스타필드"],
 };
 
-const TITLE_KEYWORD = "디지몬";
-const ARTGRAPHY_TAG = "아트그라피";
+// 제목 판정: 아래 토큰이 "전부" 들어있어야 대상. 정규화 후 비교하므로 띄어쓰기 무관
+const TITLE_TOKENS = ["디지몬", "어드벤처"];
+
+// 아트그라피 판정: 아래 중 "하나라도" 있으면 ★ 표시
+const ART_TOKENS = ["아트그라피", "아트그래피", "artgraphy", "artgrafy"];
 const REQUIRE_ARTGRAPHY = false; // probe에서 ★ 확인 후 true 전환 권장
+
+// 지점 자동 매칭이 어긋날 때 강제 지정
+// 예: const BRANCH_OVERRIDE = { "20260920": { "하남스타필드": "1381" } };
+const BRANCH_OVERRIDE = {};
+
 const MIN_SEATS = 1;             // 2인 관람이면 2
 
 const LOOP_COUNT = 4;            // 실행 1회당 확인 횟수
@@ -110,6 +118,33 @@ async function fetchBokd(playDe, brchNo = "", verbose = false) {
 // 파싱부
 // ─────────────────────────────────────────────
 
+const STRIP = /[\s()\[\]{}<>·ㆍ,.\-_/|:;~!@#$%^&*+='"?！［］（）【】]+/g;
+
+// 공백·괄호·기호 제거 + 소문자화. 띄어쓰기 표기 차이를 흡수
+const norm = (s) => String(s).normalize("NFKC").replace(STRIP, "").toLowerCase();
+
+// 완전일치 → 접두일치 → 부분일치 순으로 지점명 후보 반환
+function matchBranch(table, keyword) {
+  const nk = norm(keyword);
+  const names = Object.keys(table);
+  const exact = names.filter((n) => norm(n) === nk);
+  if (exact.length) return { names: exact, how: "완전일치" };
+  const starts = names.filter((n) => norm(n).startsWith(nk));
+  if (starts.length) return { names: starts, how: "접두일치" };
+  return { names: names.filter((n) => norm(n).includes(nk)), how: "부분일치" };
+}
+
+const hasArt = (text) => {
+  const n = norm(text);
+  return ART_TOKENS.some((t) => n.includes(norm(t)));
+};
+
+// 제목 필드를 우선 보고, 파싱 실패 시에만 원문으로 보조 판정
+function titleMatch(row) {
+  const target = row.movie && row.movie !== "?" ? norm(row.movie) : norm(row.raw);
+  return TITLE_TOKENS.every((t) => target.includes(norm(t)));
+}
+
 function* walkDicts(obj) {
   if (Array.isArray(obj)) {
     for (const v of obj) yield* walkDicts(v);
@@ -153,7 +188,7 @@ function extractShowtimes(data) {
       screen: String(pick(d, "theabNm", "theabExpoNm") ?? "?"),
       rest: parseInt(pick(d, "restSeatCnt", "restSeat", "seatRest") ?? "", 10),
       total: parseInt(pick(d, "totSeatCnt", "totSeat") ?? "", 10),
-      art: raw.includes(ARTGRAPHY_TAG),
+      art: hasArt(raw),
       raw,
     };
     const key = [row.branch, row.date, row.start, row.screen].join("|");
@@ -165,8 +200,7 @@ function extractShowtimes(data) {
   return rows;
 }
 
-const isTarget = (r) =>
-  r.raw.includes(TITLE_KEYWORD) && (!REQUIRE_ARTGRAPHY || r.art);
+const isTarget = (r) => titleMatch(r) && (!REQUIRE_ARTGRAPHY || r.art);
 
 const fmtTime = (t) => (/^\d{4,}$/.test(t) ? `${t.slice(0, 2)}:${t.slice(2, 4)}` : t);
 const fmtDate = (d) => (/^\d{8}$/.test(d) ? `${d.slice(4, 6)}/${d.slice(6, 8)}` : d);
@@ -216,17 +250,33 @@ async function buildPlan() {
   const data = await fetchBokd(firstDate, "", true);
   if (!data) return null;
   const table = extractBranches(data);
-  const plan = {};
+  const plan = {}, notes = [];
   for (const [date, keywords] of Object.entries(TARGETS)) {
     plan[date] = {};
+    const forced = BRANCH_OVERRIDE[date] || {};
+    for (const [nm, no] of Object.entries(forced)) {
+      plan[date][nm] = String(no);
+      notes.push(`${fmtDate(date)} ${nm}: 수동 지정 brchNo=${no}`);
+    }
     for (const kw of keywords) {
-      const names = Object.keys(table);
-      const exact = names.filter((n) => n === kw);
-      const partial = names.filter((n) => n.includes(kw));
-      for (const n of (exact.length ? exact : partial)) plan[date][n] = table[n];
+      if (Object.keys(forced).some((n) => norm(n).includes(norm(kw)))) continue;
+      const { names, how } = matchBranch(table, kw);
+      if (!names.length) {
+        notes.push(`⚠ ${fmtDate(date)} '${kw}' 매칭 실패. 감시 대상에서 빠짐`);
+        continue;
+      }
+      if (names.length > 1) {
+        notes.push(
+          `⚠ ${fmtDate(date)} '${kw}' 가 ${names.length}곳에 걸림 → ${names.join(", ")}` +
+          " / 정확한 지점명 또는 BRANCH_OVERRIDE 사용 권장"
+        );
+      } else {
+        notes.push(`${fmtDate(date)} '${kw}' → ${names[0]} (${how})`);
+      }
+      for (const n of names) plan[date][n] = table[n];
     }
   }
-  return { table, plan };
+  return { table, plan, notes };
 }
 
 async function scan(plan, state) {
@@ -235,7 +285,9 @@ async function scan(plan, state) {
     for (const [nm, no] of Object.entries(branches)) {
       const data = await fetchBokd(date, no);
       if (!data) { console.log(`  ${fmtDate(date)} ${nm}: 응답 실패`); continue; }
-      const rows = extractShowtimes(data).filter(isTarget);
+      const rows = extractShowtimes(data).filter(
+        MODE === "probe" ? titleMatch : isTarget
+      );
       if (!rows.length) console.log(`  ${fmtDate(date)} ${nm}: 대상 회차 없음`);
       for (const r of rows) {
         const rest = Number.isNaN(r.rest) ? 0 : r.rest;
@@ -268,10 +320,19 @@ async function main() {
     console.log("엔드포인트 응답 실패. 러너 IP 차단 가능성 있음");
     process.exit(1);
   }
-  const { table, plan } = built;
+  const { table, plan, notes } = built;
   console.log(`전체 지점 ${Object.keys(table).length}개 수신`);
+  for (const n of notes) console.log(`  ${n}`);
   for (const [date, br] of Object.entries(plan)) {
     console.log(`  ${fmtDate(date)} → ${Object.entries(br).map(([n, v]) => `${n}(${v})`).join(", ") || "매칭 없음"}`);
+  }
+  if (notes.some((n) => n.startsWith("⚠"))) {
+    const kws = [...new Set(Object.values(TARGETS).flat())];
+    for (const kw of kws) {
+      const cand = Object.keys(table).filter((n) => norm(n).includes(norm(kw).slice(0, 2)));
+      if (cand.length) console.log(`  [참고] '${kw}' 유사 지점: ${cand.slice(0, 8).join(", ")}`);
+    }
+    if (MODE === "watch") await telegram("⚠ 메가박스 알리미: 지점 매칭 경고 발생. 실행 로그 확인 필요");
   }
 
   if (MODE === "probe") {
